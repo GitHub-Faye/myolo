@@ -549,6 +549,692 @@ metrics = model.val()
 model.export(format='onnx')  # 导出为ONNX格式
 ```
 
-## 6. 总结
+## 6. 添加新模型到YOLOv12项目
+
+YOLOv12项目的模块化架构设计允许研究者和开发者轻松地添加新模型或修改现有模型。本节将详细介绍如何向项目中添加新模型。
+
+### 6.1 模型配置规范
+
+YOLOv12项目中的模型配置遵循一定的规范，确保所有模型能被框架正确识别和加载。
+
+#### 6.1.1 配置文件命名规范
+
+```
+ultralytics/cfg/models/[版本号]/[模型名].yaml
+```
+
+其中：
+- **版本号**：通常为"v12"或其他版本标识，表示模型所属的YOLO版本
+- **模型名**：描述性名称，通常包含模型版本和特点，如"yolov12"、"yolov12-p6"等
+
+例如：
+- `ultralytics/cfg/models/v12/yolov12.yaml` - 标准YOLOv12模型
+- `ultralytics/cfg/models/v12/yolov12-seg.yaml` - 分割任务的YOLOv12模型
+
+#### 6.1.2 配置文件内容结构规范
+
+配置文件必须包含以下几个主要部分：
+
+1. **元信息**：顶部注释，包含许可信息和模型简介
+2. **参数部分**：必须定义`nc`（类别数）和`scales`（各规模模型的参数）
+3. **backbone部分**：定义特征提取网络
+4. **head部分**：定义特征融合和目标检测/分割头
+
+基本模板：
+
+```yaml
+# 元信息 - 版权和说明
+# YOLOv12-[自定义名称] 🚀, AGPL-3.0 license
+# [模型简介和输出说明]
+
+# 参数部分
+nc: 80  # 类别数量
+scales:  # 缩放系数
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]  # nano模型参数
+  s: [0.50, 0.50, 1024]  # small模型参数
+  m: [0.50, 1.00, 512]   # medium模型参数
+  l: [1.00, 1.00, 512]   # large模型参数
+  x: [1.00, 1.50, 512]   # xlarge模型参数
+
+# backbone部分
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]]  # 第一层
+  # ... 其他层定义 ...
+
+# head部分
+head:
+  # [from, repeats, module, args]
+  # ... 头部层定义 ...
+  - [[最终层索引列表], 1, Detect/Segment/Pose, [nc]]  # 输出层
+```
+
+### 6.2 添加新模型的步骤
+
+以下是向YOLOv12项目添加新模型的完整流程：
+
+#### 6.2.1 创建新的配置文件
+
+1. 在适当的目录创建新的YAML配置文件：
+
+```bash
+# 例如创建一个特殊的YOLOv12变体
+touch ultralytics/cfg/models/v12/yolov12-custom.yaml
+```
+
+2. 基于规范编写配置文件内容：
+
+```yaml
+# YOLOv12-Custom 🚀, AGPL-3.0 license
+# 自定义的YOLOv12模型，添加了[描述你的改进点]
+
+# 参数部分
+nc: 80
+scales:
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+  # ... 其他规模定义 ...
+
+# backbone部分 - 这里进行自定义修改
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]]
+  # ... 你的自定义backbone设计 ...
+  - [-1, 4, CustomModule, [512, True, 4]]  # 新增自定义模块
+
+# head部分
+head:
+  # ... 你的自定义head设计 ...
+  - [[输出层索引], 1, Detect, [nc]]
+```
+
+#### 6.2.2 实现自定义模块（如需要）
+
+如果你的模型包含新的模块类型，需要在`ultralytics/nn/modules/`目录下实现它：
+
+1. 选择合适的文件，如`block.py`或创建新文件
+2. 实现你的自定义模块：
+
+```python
+# 在 ultralytics/nn/modules/block.py 中添加
+
+class CustomModule(nn.Module):
+    """
+    自定义模块说明文档
+    """
+    def __init__(self, c1, c2, custom_param=1):
+        super().__init__()
+        # 初始化层和参数
+        self.conv = nn.Conv2d(c1, c2, kernel_size=3, padding=1)
+        self.custom_param = custom_param
+        # ... 其他层定义 ...
+        
+    def forward(self, x):
+        """模块的前向传播"""
+        # 实现前向传播逻辑
+        return self.conv(x)
+```
+
+#### 6.2.3 注册模型到框架
+
+确保框架能够识别和加载你的模型：
+
+1. 可能需要更新`ultralytics/nn/tasks.py`文件，确保你的自定义模块被正确导入：
+
+```python
+# 在 ultralytics/nn/tasks.py 中
+from ultralytics.nn.modules.block import CustomModule  # 导入自定义模块
+```
+
+2. 如果你创建了全新的模型类型（如YOLOv12的一个变种），可能需要在`ultralytics/models/__init__.py`中注册：
+
+```python
+# 在 ultralytics/models/__init__.py 中
+from ultralytics.models import yolo  # 确保YOLO模型被正确导入
+```
+
+#### 6.2.4 测试新模型
+
+完成上述步骤后，测试你的新模型：
+
+```python
+from ultralytics import YOLO
+
+# 从你的自定义配置创建模型
+model = YOLO('ultralytics/cfg/models/v12/yolov12-custom.yaml')
+
+# 测试训练
+results = model.train(data='coco128.yaml', epochs=1)
+
+# 验证模型是否能够正常加载和运行
+model.info()  # 打印模型信息
+model('path/to/image.jpg')  # 测试推理
+```
+
+### 6.3 高级模型定制示例
+
+下面提供几个高级模型定制的具体示例，展示如何添加不同类型的新模型。
+
+#### 6.3.1 添加轻量化YOLOv12变体
+
+这个例子展示如何创建一个更加轻量化的YOLOv12变体，适用于资源受限设备：
+
+```yaml
+# ultralytics/cfg/models/v12/yolov12-mobile.yaml
+
+# YOLOv12-Mobile 🚀, AGPL-3.0 license
+# 轻量化的YOLOv12模型，针对移动设备优化
+
+nc: 80
+scales:
+  # 增加更轻量的版本
+  tiny: [0.25, 0.125, 512]  # 极小版本
+  n: [0.33, 0.25, 768]      # 调整nano版参数
+
+# 轻量化的backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [32, 3, 2]]          # 减少初始通道数
+  - [-1, 1, Conv, [64, 3, 2]]
+  - [-1, 1, C3k2, [128, False, 0.25]]  # 减少模块重复和通道数
+  - [-1, 1, Conv, [128, 3, 2]]
+  - [-1, 1, C3k2, [256, False, 0.25]]
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [-1, 2, A2C2f, [256, True, 2]]     # 减少区域数量和重复次数
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [-1, 2, A2C2f, [512, True, 1]]
+
+# 简化的head
+head:
+  # ... 轻量化的检测头设计 ...
+  - [[最终层索引], 1, Detect, [nc]]
+```
+
+#### 6.3.2 添加高精度YOLOv12变体
+
+这个例子展示如何创建一个优化精度的YOLOv12变体，适用于需要高精度的场景：
+
+```yaml
+# ultralytics/cfg/models/v12/yolov12-hd.yaml
+
+# YOLOv12-HD 🚀, AGPL-3.0 license
+# 高精度YOLOv12模型，优化了检测性能
+
+nc: 80
+scales:
+  # [depth, width, max_channels]
+  # 保持原有缩放比例但增加通道数
+  l: [1.00, 1.00, 768]   # 增加large模型的通道上限
+  x: [1.00, 1.50, 768]   # 增加xlarge模型的通道上限
+  # 添加超大规模版本
+  xx: [1.25, 2.00, 768]  # 新增xxlarge版本
+
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]]
+  # ... 基本结构与标准版相同 ...
+  # 增强注意力模块，增加区域数和通道数
+  - [-1, 6, A2C2f, [512, True, 8]]     # 增加A2C2f的复杂度
+  - [-1, 1, Conv, [1024, 3, 2]]
+  - [-1, 6, A2C2f, [1024, True, 4]]    # 增加重复次数和区域数
+
+# 增强的head
+head:
+  # ... 优化的检测头设计 ...
+  # 可能包含更多的特征融合层或更复杂的注意力模块
+  - [[最终层索引], 1, Detect, [nc]]
+```
+
+#### 6.3.3 添加多任务YOLOv12模型
+
+这个例子展示如何创建一个支持多任务学习的YOLOv12变体：
+
+```yaml
+# ultralytics/cfg/models/v12/yolov12-multi.yaml
+
+# YOLOv12-Multi 🚀, AGPL-3.0 license
+# 多任务YOLOv12模型，同时支持检测和分割
+
+nc: 80  # 检测类别数
+nm: 32  # 分割掩码通道数（新增参数）
+scales:
+  # [depth, width, max_channels]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  # ... 其他规模 ...
+
+backbone:
+  # 标准backbone结构
+  # ... 主干网络定义 ...
+
+head:
+  # 共享的特征提取层
+  # ... 共享头部设计 ...
+  
+  # 检测分支
+  - [[-1, 特征层1, 特征层2], 1, Detect, [nc]]
+  
+  # 分割分支（新增）
+  - [[-1, 特征层1, 特征层2], 1, Segment, [nc, nm]]
+```
+
+### 6.4 模型发布和共享
+
+完成新模型开发并验证其性能后，可以选择以下方式发布和共享：
+
+1. **提交Pull Request到Ultralytics官方仓库**：
+   - 确保代码质量和文档完整性
+   - 提供模型性能对比数据
+   - 遵循项目的代码风格和贡献指南
+
+2. **发布预训练权重**：
+   - 使用标准数据集(如COCO)训练模型
+   - 导出模型权重：`model.export()`
+   - 上传到模型仓库如Hugging Face或自己的服务器
+
+3. **编写使用文档**：
+   - 说明模型的创新点和使用场景
+   - 提供基本的使用示例
+   - 包含性能对比和资源需求
+
+### 6.5 模型配置规范检查清单
+
+在添加新模型时，使用以下检查清单确保你的配置符合项目规范：
+
+- [ ] 配置文件位于正确的目录结构中
+- [ ] 配置文件包含完整的文档说明和许可信息
+- [ ] 参数部分包含必要的`nc`和`scales`定义
+- [ ] backbone和head结构设计合理，层连接正确
+- [ ] 自定义模块已正确实现并文档化
+- [ ] 模型能够成功加载并进行训练和推理
+- [ ] 提供了模型性能基准测试数据（速度、精度等）
+
+按照上述规范和步骤，你可以成功地向YOLOv12项目添加新的模型变体，扩展其功能或优化特定场景下的性能。
+
+## 7. 添加新任务类型到YOLOv12项目
+
+除了修改和创建新模型外，YOLOv12项目还支持添加全新的任务类型。本节将详细说明如何扩展YOLOv12框架以支持新任务，以人脸关键点检测任务为例。
+
+### 7.1 任务类型扩展规范
+
+YOLOv12的任务扩展需要遵循一定的规范，确保新任务能无缝集成到现有框架中。
+
+#### 7.1.1 任务集成的核心组件和正确结构
+
+根据项目规范，添加新任务类型需要实现以下组件，并遵循特定的文件组织结构：
+
+1. **模型定义类**：在`ultralytics/nn/tasks.py`中定义，继承自基础模型类
+2. **任务特定组件**：在`ultralytics/models/yolo/[task_name]/`目录中实现以下组件：
+   - **训练器**：负责该任务的训练逻辑
+   - **验证器**：评估模型在该任务上的性能
+   - **预测器**：使用训练好的模型执行推理
+
+这种分离是YOLOv12项目的标准架构，类似于项目中其他任务类型（如检测、分割、关键点检测等）的组织方式。遵循这种结构可以确保新任务与框架的其他部分保持一致性和兼容性。
+
+#### 7.1.2 正确的文件组织结构
+
+```
+ultralytics/
+├── nn/
+│   └── tasks.py        # 所有模型类定义的地方（包括新任务的FacePoseModel）
+└── models/
+    └── yolo/
+        └── [task_name]/  # 如 "face"
+            ├── __init__.py       # 导出接口
+            ├── train.py          # 训练器实现
+            ├── val.py            # 验证器实现
+            └── predict.py        # 预测器实现
+```
+
+模型类命名应遵循`<TaskName>Model`格式，任务组件应遵循`<TaskName><Component>`格式，例如：
+- 模型类：`FacePoseModel`（在`nn/tasks.py`中）
+- 训练器：`FacePoseTrainer`
+- 验证器：`FacePoseValidator`
+- 预测器：`FacePosePredictor`
+
+### 7.2 添加新任务的详细步骤
+
+以添加人脸关键点检测任务为例，详细说明完整流程：
+
+#### 7.2.1 在nn/tasks.py中实现模型类
+
+首先，在`ultralytics/nn/tasks.py`文件中添加新任务的模型类定义：
+
+```python
+# 在 ultralytics/nn/tasks.py 中添加
+
+class FacePoseModel(DetectionModel):
+    """YOLOv12 face pose model."""
+
+    def __init__(self, cfg="yolov12n-face.yaml", ch=3, nc=None, data_kpt_shape=(None, None), verbose=True):
+        """Initialize YOLOv12 Face Pose model."""
+        if not isinstance(cfg, dict):
+            cfg = yaml_model_load(cfg)  # load model YAML
+        if any(data_kpt_shape) and list(data_kpt_shape) != list(cfg["kpt_shape"]):
+            LOGGER.info(f"Overriding model.yaml kpt_shape={cfg['kpt_shape']} with kpt_shape={data_kpt_shape}")
+            cfg["kpt_shape"] = data_kpt_shape
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+
+    def init_criterion(self):
+        """Initialize the loss criterion for the FacePoseModel."""
+        from ultralytics.utils.loss import v12FacePoseLoss
+        return v12FacePoseLoss(self)
+```
+
+#### 7.2.2 创建任务目录和文件
+
+创建任务所需的目录和文件：
+
+```bash
+# 创建任务目录
+mkdir -p ultralytics/models/yolo/face
+
+# 创建必要的Python文件
+touch ultralytics/models/yolo/face/__init__.py
+touch ultralytics/models/yolo/face/train.py
+touch ultralytics/models/yolo/face/val.py
+touch ultralytics/models/yolo/face/predict.py
+```
+
+#### 7.2.3 实现训练器组件
+
+在`train.py`中实现训练逻辑：
+
+```python
+# ultralytics/models/yolo/face/train.py
+
+from ultralytics.models.yolo.pose.train import PoseTrainer
+from ultralytics.nn.tasks import FacePoseModel  # 从nn.tasks导入模型类
+from ultralytics.utils import LOGGER, RANK, DEFAULT_CFG
+
+class FacePoseTrainer(PoseTrainer):
+    """人脸关键点检测训练器，继承自PoseTrainer"""
+    
+    def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
+        """初始化FacePoseTrainer"""
+        if overrides is None:
+            overrides = {}
+        overrides["task"] = "face"  # 设置任务类型为人脸检测
+        super().__init__(cfg, overrides, _callbacks)
+    
+    def preprocess_batch(self, batch):
+        """
+        预处理批次数据
+        
+        参数:
+            batch: 输入批次数据
+            
+        返回:
+            处理后的批次数据
+        """
+        batch = super().preprocess_batch(batch)
+        # 添加人脸检测特定的数据预处理（如需要）
+        return batch
+        
+    def get_model(self, cfg=None, weights=None, verbose=True):
+        """
+        获取模型
+        
+        参数:
+            cfg: 模型配置
+            weights: 预训练权重
+            verbose: 是否打印详细信息
+            
+        返回:
+            初始化的模型
+        """
+        # 直接从nn.tasks导入FacePoseModel，而不是从本地model.py导入
+        model = FacePoseModel(cfg, verbose=verbose and RANK == -1)
+        if weights:
+            model.load(weights)
+        return model
+```
+
+#### 7.2.4 实现验证器组件
+
+在`val.py`中实现验证逻辑：
+
+```python
+# ultralytics/models/yolo/face/val.py
+
+from ultralytics.models.yolo.pose.val import PoseValidator
+
+class FacePoseValidator(PoseValidator):
+    """人脸关键点检测验证器，继承自PoseValidator"""
+    
+    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None):
+        """初始化FacePoseValidator"""
+        super().__init__(dataloader, save_dir, pbar, args, _callbacks)
+        self.is_face = True  # 指示这是一个面部关键点验证器
+        # 设置特定于人脸关键点的度量标准或后处理
+        
+    def postprocess(self, preds):
+        """
+        后处理预测结果
+        
+        参数:
+            preds: 原始预测结果
+            
+        返回:
+            处理后的预测结果
+        """
+        preds = super().postprocess(preds)
+        # 添加特定于人脸关键点的后处理
+        return preds
+        
+    def metrics(self, preds, batch):
+        """
+        计算人脸关键点的评估指标
+        
+        参数:
+            preds: 预测结果
+            batch: 批次数据
+            
+        返回:
+            计算的度量值
+        """
+        # 计算特定于人脸关键点的度量标准（如PCK）
+        return super().metrics(preds, batch)
+```
+
+#### 7.2.5 实现预测器组件
+
+在`predict.py`中实现推理逻辑：
+
+```python
+# ultralytics/models/yolo/face/predict.py
+
+from ultralytics.models.yolo.pose.predict import PosePredictor
+
+class FacePosePredictor(PosePredictor):
+    """人脸关键点检测预测器，继承自PosePredictor"""
+    
+    def __init__(self, cfg=None, overrides=None, _callbacks=None):
+        """初始化FacePosePredictor"""
+        super().__init__(cfg, overrides, _callbacks)
+        self.is_face = True  # 指示这是一个面部关键点预测器
+        # 设置特定于人脸关键点的参数
+        
+    def postprocess(self, preds, img, orig_imgs):
+        """
+        后处理预测结果
+        
+        参数:
+            preds: 原始预测结果
+            img: 处理后的输入图像
+            orig_imgs: 原始输入图像
+            
+        返回:
+            处理后的预测结果
+        """
+        results = super().postprocess(preds, img, orig_imgs)
+        # 添加特定于人脸关键点的后处理
+        # 例如，可以添加面部特定的可视化或面部特征提取
+        return results
+```
+
+#### 7.2.6 初始化模块和导出接口
+
+在`__init__.py`中导出相关类，但注意**不要**导出模型类（因为它已在nn/tasks.py中定义）：
+
+```python
+# ultralytics/models/yolo/face/__init__.py
+
+# 注意：FacePoseModel已在nn.tasks.py中定义，不需要在此导入
+from .train import FacePoseTrainer
+from .val import FacePoseValidator
+from .predict import FacePosePredictor
+
+__all__ = ['FacePoseTrainer', 'FacePoseValidator', 'FacePosePredictor']
+```
+
+#### 7.2.7 在任务映射中注册新任务
+
+在`ultralytics/models/yolo/model.py`的`YOLO`类中更新`task_map`方法，确保从正确的位置导入模型类：
+
+```python
+# 首先更新导入语句
+from ultralytics.nn.tasks import ClassificationModel, DetectionModel, FacePoseModel, OBBModel, PoseModel, SegmentationModel, WorldModel
+
+@property
+def task_map(self):
+    """映射头部到模型、训练器、验证器和预测器类。"""
+    return {
+        # 现有任务...
+        "classify": {
+            "model": ClassificationModel,
+            "trainer": yolo.classify.ClassificationTrainer,
+            "validator": yolo.classify.ClassificationValidator,
+            "predictor": yolo.classify.ClassificationPredictor,
+        },
+        # ... 其他现有任务 ...
+        
+        # 添加新的人脸关键点检测任务
+        "face": {
+            "model": FacePoseModel,  # 注意：从nn.tasks直接导入
+            "trainer": yolo.face.FacePoseTrainer,
+            "validator": yolo.face.FacePoseValidator,
+            "predictor": yolo.face.FacePosePredictor,
+        },
+    }
+```
+
+### 7.3 创建任务特定的配置文件
+
+为新任务创建特定的YAML配置文件：
+
+```yaml
+# ultralytics/cfg/models/v12/yolov12-face.yaml
+
+# YOLOv12-face 🚀, AGPL-3.0 license
+# YOLOv12 面部关键点检测模型
+
+# 参数
+nc: 1  # 只有一个类别 - 人脸
+kpt_shape: [5, 3]  # 5个关键点, 每个点有x,y坐标和可见性
+scales:
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024]
+  s: [0.50, 0.50, 1024]
+  m: [0.50, 1.00, 512]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.50, 512]
+
+# backbone部分 - 与标准YOLOv12相同或根据需要修改
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv,  [64, 3, 2]]
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]]
+  - [-1, 2, C3k2,  [256, False, 0.25]]
+  # ... 其他层 ...
+
+# head部分 - 修改以适应面部关键点检测
+head:
+  # ... 特征提取和融合层 ...
+  
+  # 最后一层使用Pose而不是Detect
+  - [[14, 17, 20], 1, Pose, [nc, kpt_shape]]  # Pose检测层，使用nc和kpt_shape参数
+```
+
+### 7.4 准备人脸关键点数据集配置
+
+创建适用于人脸关键点检测的数据集配置文件：
+
+```yaml
+# 示例：ultralytics/cfg/datasets/wflw.yaml
+
+# WFLW数据集配置（人脸关键点检测）
+# 路径和结构
+path: ../datasets/wflw  # 数据集根目录
+train: images/train     # 训练图像相对路径
+val: images/val         # 验证图像相对路径
+test: images/test       # 测试图像相对路径 (可选)
+
+# 类别信息
+nc: 1                   # 类别数量，这里只有人脸一个类
+names: ['face']         # 类别名称
+
+# 关键点信息
+kpt_shape: [5, 3]       # 5个关键点，每个有3个值(x,y,visible)
+# 关键点名称 (通常是面部的5个关键点)
+keypoints_names: ['left_eye', 'right_eye', 'nose', 'left_mouth', 'right_mouth']
+
+# 数据增强参数
+degrees: 45             # 旋转角度范围
+translate: 0.1          # 平移范围
+scale: 0.5              # 缩放范围
+shear: 0.0              # 剪切范围
+perspective: 0.0        # 透视变换范围
+flipud: 0.0             # 上下翻转概率 (通常面部不翻转)
+fliplr: 0.5             # 左右翻转概率
+mosaic: 1.0             # 马赛克增强概率
+mixup: 0.0              # 混合增强概率
+```
+
+### 7.5 测试和使用新任务
+
+完成上述步骤后，可以测试和使用新添加的人脸关键点检测任务：
+
+```python
+from ultralytics import YOLO
+
+# 创建或加载人脸关键点检测模型
+model = YOLO('yolov12n-face.yaml')  # 从配置创建
+# 或者加载预训练模型
+# model = YOLO('yolov12n-face.pt')
+
+# 训练模型
+results = model.train(
+    data='wflw.yaml',  # 人脸关键点数据集
+    epochs=100,
+    imgsz=640,
+    task='face',  # 指定任务类型为'face'
+    batch=16
+)
+
+# 验证模型
+metrics = model.val()
+
+# 使用模型进行预测
+results = model('path/to/image.jpg')
+```
+
+### 7.6 任务添加检查清单
+
+在添加新任务时，使用以下检查清单确保所有必要步骤都已完成：
+
+- [ ] 在`nn/tasks.py`中定义模型类
+- [ ] 创建任务目录和基本文件结构（训练器、验证器、预测器）
+- [ ] 在模型映射中正确注册新任务
+- [ ] 为任务创建特定的配置文件
+- [ ] 准备适用于该任务的数据集配置
+- [ ] 实现任务特定的预处理、后处理和评估指标
+- [ ] 测试训练、验证和推理功能
+- [ ] 编写使用文档和示例
+
+完成这些步骤后，你就成功地向YOLOv12项目添加了一个全新的任务类型，扩展了框架的功能范围。
+
+## 8. 总结
 
 YOLOv12作为注意力驱动的目标检测模型，提供了强大的性能和灵活的架构。通过本指南中的方法，可以根据具体需求创建和修改YOLOv12模型，实现定制化的目标检测解决方案。无论是提高精度、减小模型体积还是适应特定任务，YOLOv12都提供了丰富的修改空间和可能性。 

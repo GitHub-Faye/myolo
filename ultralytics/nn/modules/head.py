@@ -15,7 +15,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect"
+__all__ = "Detect", "Segment", "Pose", "FacePose", "Classify", "OBB", "RTDETRDecoder", "v10Detect"
 
 
 class Detect(nn.Module):
@@ -623,3 +623,83 @@ class v10Detect(Detect):
             for x in ch
         )
         self.one2one_cv3 = copy.deepcopy(self.cv3)
+
+
+class FacePose(Detect):
+    """YOLOv12 Face Pose head for facial keypoints detection."""
+
+    def __init__(self, nc=1, kpt_shape=(5, 3), ch=()):
+        """
+        初始化FacePose
+        Args:
+            nc: 类别数量，对于人脸检测通常为1
+            kpt_shape: 关键点形状，(5, 3)表示5个关键点，每个关键点有3个值(x,y,visibility)
+            ch: 输入通道数
+        """
+        super().__init__(nc, ch)
+        self.kpt_shape = kpt_shape  # 关键点形状：数量和维度(x,y,visibility)
+        self.nk = kpt_shape[0] * kpt_shape[1]  # 关键点总数 = 5点 * 3值 = 15
+        
+        # 添加关键点预测头，参考Pose类的实现
+        c4 = max(ch[0] // 4, self.nk)  # 通道数
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1)) 
+            for x in ch
+        )
+
+    def forward(self, x):
+        """
+        前向传播
+        Args:
+            x: 输入特征图列表
+        """
+        bs = x[0].shape[0]  # 批次大小
+        kpt = torch.cat([self.cv4[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)  # (bs, 15, h*w)
+        
+        # 使用Detect类的前向传播处理边界框和分类
+        x = Detect.forward(self, x)
+        
+        if self.training:
+            return x, kpt
+        
+        # 推理时解码关键点
+        pred_kpt = self.kpts_decode(bs, kpt)
+        return torch.cat([x, pred_kpt], 1) if self.export else (torch.cat([x[0], pred_kpt], 1), (x[1], kpt))
+    
+    def kpts_decode(self, bs, kpts):
+        """
+        解码关键点
+        Args:
+            bs: 批次大小
+            kpts: 关键点特征
+        """
+        ndim = self.kpt_shape[1]  # 每个关键点的维度数(x,y,visibility)
+        if self.export:  # 导出模式
+            y = kpts.sigmoid()
+            y = y.reshape(bs, *self.kpt_shape, -1)
+            return y
+            
+        y = kpts.clone()
+        if ndim == 3:  # 处理三个维度的情况
+            y[:, 2::3] = y[:, 2::3].sigmoid()  # visibility
+            
+        # 重新整形以获得每个图像的关键点
+        y = y.reshape(bs, self.kpt_shape[0], ndim, -1)
+        
+        # 使用anchors和strides来解码坐标
+        device, dtype = y.device, y.dtype
+        
+        # 创建grid和stride张量（类似Detect中的实现）
+        grid_x = torch.arange(self.shape[1], device=device, dtype=dtype)
+        grid_y = torch.arange(self.shape[0], device=device, dtype=dtype)
+        
+        yv, xv = torch.meshgrid(grid_y, grid_x, indexing='ij')
+        grid = torch.stack((xv, yv), dim=0)
+        grid = grid.unsqueeze(0).repeat(bs, 1, 1, 1, 1)
+        
+        # 应用stride
+        y[..., 0] = (y[..., 0] + grid[..., 0].view(bs, 1, 1, -1)) * self.stride.view(1, 1, 1, -1)
+        y[..., 1] = (y[..., 1] + grid[..., 1].view(bs, 1, 1, -1)) * self.stride.view(1, 1, 1, -1)
+        
+        y = y.reshape(bs, -1, y.shape[-1])  # (bs, nk, h*w) -> (bs, nk*h*w)
+        return y

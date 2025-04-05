@@ -429,6 +429,24 @@ class PoseModel(DetectionModel):
         return v8PoseLoss(self)
 
 
+class FacePoseModel(DetectionModel):
+    """YOLOv12 face pose model."""
+
+    def __init__(self, cfg="yolov12n-face.yaml", ch=3, nc=None, data_kpt_shape=(None, None), verbose=True):
+        """Initialize YOLOv12 Face Pose model."""
+        if not isinstance(cfg, dict):
+            cfg = yaml_model_load(cfg)  # load model YAML
+        if any(data_kpt_shape) and list(data_kpt_shape) != list(cfg["kpt_shape"]):
+            LOGGER.info(f"Overriding model.yaml kpt_shape={cfg['kpt_shape']} with kpt_shape={data_kpt_shape}")
+            cfg["kpt_shape"] = data_kpt_shape
+        super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+
+    def init_criterion(self):
+        """Initialize the loss criterion for the FacePoseModel."""
+        from ultralytics.utils.loss import v12FacePoseLoss
+        return v12FacePoseLoss(self)
+
+
 class ClassificationModel(BaseModel):
     """YOLOv8 classification model."""
 

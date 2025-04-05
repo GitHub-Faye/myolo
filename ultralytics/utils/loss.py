@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 from ultralytics.utils.metrics import OKS_SIGMA
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
@@ -152,6 +153,58 @@ class KeypointLoss(nn.Module):
         # e = d / (2 * (area * self.sigmas) ** 2 + 1e-9)  # from formula
         e = d / ((2 * self.sigmas).pow(2) * (area + 1e-9) * 2)  # from cocoeval
         return (kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)).mean()
+
+
+class WingLoss(nn.Module):
+    """Wing Loss for facial keypoint detection.
+    
+    参数:
+        w (float): Wing宽度参数，默认为10
+        epsilon (float): Wing曲率参数，默认为2
+    """
+    
+    def __init__(self, w=10.0, epsilon=2.0):
+        """初始化Wing Loss"""
+        super().__init__()
+        self.w = w
+        self.epsilon = epsilon
+        self.C = self.w - self.w * np.log(1 + self.w / self.epsilon)
+        
+    def forward(self, pred_kpts, gt_kpts, kpt_mask, area=None):
+        """
+        计算Wing Loss
+        
+        参数:
+            pred_kpts (torch.Tensor): 预测的关键点坐标，形状为(N, K, 2)
+            gt_kpts (torch.Tensor): 真实的关键点坐标，形状为(N, K, 2)
+            kpt_mask (torch.Tensor): 关键点可见性掩码，形状为(N, K)
+            area (torch.Tensor, 可选): 目标区域面积，用于归一化
+            
+        返回:
+            (torch.Tensor): Wing Loss值
+        """
+        # 计算欧氏距离
+        diff = torch.abs(pred_kpts - gt_kpts)
+        
+        # 应用Wing函数
+        loss = torch.where(
+            diff < self.w,
+            self.w * torch.log(1 + diff / self.epsilon),
+            diff - self.C
+        )
+        
+        # 应用掩码
+        loss = loss * kpt_mask.unsqueeze(-1)
+        
+        # 归一化，如果提供了面积
+        if area is not None and area.sum() > 0:
+            loss = loss.sum() / (area.sum() * 2 + 1e-10)  # 除以2是因为每个关键点有x和y两个坐标
+        else:
+            # 否则除以有效关键点数量
+            num_kpts = kpt_mask.sum() * 2 + 1e-10  # 乘以2是因为每个关键点有x和y两个坐标
+            loss = loss.sum() / num_kpts
+            
+        return loss
 
 
 class v8DetectionLoss:
@@ -455,6 +508,10 @@ class v8PoseLoss(v8DetectionLoss):
         nkpt = self.kpt_shape[0]  # number of keypoints
         sigmas = torch.from_numpy(OKS_SIGMA).to(self.device) if is_pose else torch.ones(nkpt, device=self.device) / nkpt
         self.keypoint_loss = KeypointLoss(sigmas=sigmas)
+        self.lambda_kpt = 0.5  # 关键点损失权重系数
+        
+        # 使用自定义的Wing Loss替代标准关键点损失
+        self.wing_loss = WingLoss(w=10.0, epsilon=2.0)
 
     def __call__(self, preds, batch):
         """Calculate the total loss and detach it."""
@@ -590,7 +647,7 @@ class v8PoseLoss(v8DetectionLoss):
             area = xyxy2xywh(target_bboxes[masks])[:, 2:].prod(1, keepdim=True)
             pred_kpt = pred_kpts[masks]
             kpt_mask = gt_kpt[..., 2] != 0 if gt_kpt.shape[-1] == 3 else torch.full_like(gt_kpt[..., 0], True)
-            kpts_loss = self.keypoint_loss(pred_kpt, gt_kpt, kpt_mask, area)  # pose loss
+            kpts_loss = self.wing_loss(pred_kpt, gt_kpt, kpt_mask, area)  # pose loss
 
             if pred_kpt.shape[-1] == 3:
                 kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
@@ -741,3 +798,140 @@ class E2EDetectLoss:
         one2one = preds["one2one"]
         loss_one2one = self.one2one(one2one, batch)
         return loss_one2many[0] + loss_one2one[0], loss_one2many[1] + loss_one2one[1]
+
+
+class v12FacePoseLoss(v8DetectionLoss):
+    """YOLOv12 人脸关键点检测损失函数
+
+    参数:
+        model (nn.Module): YOLOv12 人脸关键点检测模型
+    """
+
+    def __init__(self, model):
+        """初始化YOLOv12人脸关键点检测损失函数"""
+        super().__init__(model)
+        self.kpt_shape = model.model[-1].kpt_shape
+        self.bce_pose = nn.BCEWithLogitsLoss()
+        self.keypoint_loss = WingLoss(w=10.0, epsilon=2.0)  # 使用WingLoss计算关键点损失
+        self.lambda_kpt = 0.5  # 关键点损失权重
+
+    def __call__(self, preds, batch):
+        """计算YOLOv12人脸关键点检测损失
+
+        参数:
+            preds (torch.Tensor): 预测结果
+            batch (dict): 批处理数据，包含'img'、'cls'、'bboxes'和'keypoints'
+
+        返回:
+            (torch.Tensor): 人脸关键点检测的总损失
+        """
+        feats, pred_kpts = preds if isinstance(preds, list) and len(preds) == 2 else (preds, None)
+
+        # 计算基本检测损失
+        loss, loss_items = super().__call__(feats, batch)
+        
+        # 如果没有关键点预测，则只返回检测损失
+        if pred_kpts is None:
+            return loss, loss_items
+
+        # 获取关键点目标
+        keypoints = batch["keypoints"]
+        
+        idx = batch["batch_idx"]
+        gt_bboxes = batch["bboxes"]
+        imgsz = batch["img"].shape[2:]
+        
+        # 计算比例张量
+        stride_tensor = torch.tensor(self.stride, device=gt_bboxes.device).view(-1, 1, 1)
+        
+        # 筛选前景掩码
+        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        _, target_bboxes, target_scores, fg_mask, _ = self.assigner(feats.detach(), targets)
+        
+        if fg_mask.sum():
+            # 关键点预测的位置
+            target_scores_sum = target_scores.sum()
+            
+            # 计算关键点损失
+            kpt_loss = self.calculate_keypoints_loss(fg_mask, idx, keypoints, stride_tensor, target_bboxes, pred_kpts)
+            
+            # 应用关键点损失权重
+            loss += kpt_loss * self.lambda_kpt
+            
+            # 更新损失项目
+            loss_items = torch.cat((loss_items, kpt_loss.unsqueeze(0)))
+
+        return loss, loss_items
+
+    @staticmethod
+    def kpts_decode(anchor_points, pred_kpts):
+        """解码预测的关键点
+        
+        参数:
+            anchor_points (torch.Tensor): 锚点
+            pred_kpts (torch.Tensor): 预测的关键点偏移量
+            
+        返回:
+            (torch.Tensor): 解码后的关键点坐标
+        """
+        nk, na = pred_kpts.shape[1] // 2, anchor_points.shape[0]
+        # (bs, nk * 2, na) -> (bs, na, nk * 2) -> (bs, na, nk, 2)
+        y = pred_kpts.transpose(1, 2).reshape(-1, na, nk, 2)
+        
+        # 解码关键点坐标
+        y[..., :2] = (y[..., :2] + anchor_points.unsqueeze(1)) 
+        return y
+    
+    def calculate_keypoints_loss(self, masks, target_gt_idx, keypoints, stride_tensor, target_bboxes, pred_kpts):
+        """计算关键点损失
+        
+        参数:
+            masks (torch.Tensor): 前景目标掩码
+            target_gt_idx (torch.Tensor): 目标的GT索引
+            keypoints (torch.Tensor): 真实关键点
+            stride_tensor (torch.Tensor): 步长张量
+            target_bboxes (torch.Tensor): 目标边界框
+            pred_kpts (torch.Tensor): 预测的关键点
+            
+        返回:
+            (torch.Tensor): 关键点损失
+        """
+        # 确保掩码有目标
+        if masks.sum():
+            # 获取前景物体的索引
+            idx = torch.arange(masks.shape[0], device=masks.device)
+            idx = idx[masks]
+
+            # 获取关键点掩码
+            gt_idx = target_gt_idx[masks]
+            kpt_mask = (keypoints[..., 2] > 0).float()
+            kpt_mask = kpt_mask[gt_idx]
+            
+            # 获取坐标
+            kpt_idx_all = torch.zeros(masks.sum(), *self.kpt_shape, device=masks.device)
+            areas = torch.zeros_like(kpt_idx_all[..., 0])
+            kpt_idx_all[..., 0] = keypoints[..., 0][gt_idx]
+            kpt_idx_all[..., 1] = keypoints[..., 1][gt_idx]
+            kpt_idx_all[..., 2] = kpt_mask
+            
+            # 计算面积
+            areas = (target_bboxes[idx, 2] - target_bboxes[idx, 0]) * (
+                target_bboxes[idx, 3] - target_bboxes[idx, 1]
+            )
+
+            # 准备预测关键点
+            pred_kpts = self.kpts_decode(self.anchors, pred_kpts)
+            pred_kpts = torch.cat(pred_kpts, 1)[idx]
+            
+            # 应用步长
+            kpt_idx_all = kpt_idx_all.view(-1, self.kpt_shape[0], 3)
+            kpt_idx_all[..., :2] = kpt_idx_all[..., :2] / stride_tensor
+            pred_kpts = pred_kpts.view(-1, self.kpt_shape[0], 2)
+            
+            # 计算WingLoss
+            kpt_loss = self.keypoint_loss(pred_kpts, kpt_idx_all[..., :2], kpt_idx_all[..., 2], areas)
+            
+            return kpt_loss
+        
+        # 如果没有目标，返回0损失
+        return torch.zeros(1, device=masks.device)
