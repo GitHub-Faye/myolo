@@ -975,7 +975,19 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
     ch = [ch]
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
-        m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
+        try:
+            if m == "FacePose":
+                LOGGER.info(f"正在处理FacePose模块: {m}")
+                if m not in globals():
+                    LOGGER.error(f"ERROR: 无法在globals()中找到FacePose模块！")
+                    for key in globals().keys():
+                        if "Face" in key or "Pose" in key:
+                            LOGGER.info(f"找到相关模块: {key}")
+            m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
+        except KeyError as e:
+            LOGGER.error(f"KeyError尝试获取模块 {m}: {e}")
+            LOGGER.info(f"可用的globals模块: {[k for k in globals().keys() if not k.startswith('_')][:20]}")
+            raise
         for j, a in enumerate(args):
             if isinstance(a, str):
                 with contextlib.suppress(ValueError):
@@ -1112,6 +1124,11 @@ def yaml_model_load(path):
     unified_path = re.sub(r"(\d+)([nslmx])(.+)?$", r"\1\3", str(path))  # i.e. yolov8x.yaml -> yolov8.yaml
     yaml_file = check_yaml(unified_path, hard=False) or check_yaml(path)
     d = yaml_load(yaml_file)  # model dict
+    
+    # 调试输出配置文件内容
+    LOGGER.info(f"加载的YAML文件内容: {yaml_file}")
+    LOGGER.info(f"配置字典键: {list(d.keys())}")
+    
     d["scale"] = guess_model_scale(path)
     d["yaml_file"] = str(path)
     return d
