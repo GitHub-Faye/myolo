@@ -162,5 +162,5 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f",
-
+    "FacePose",
 )
