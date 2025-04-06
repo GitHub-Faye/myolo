@@ -1238,3 +1238,293 @@ results = model('path/to/image.jpg')
 ## 8. 总结
 
 YOLOv12作为注意力驱动的目标检测模型，提供了强大的性能和灵活的架构。通过本指南中的方法，可以根据具体需求创建和修改YOLOv12模型，实现定制化的目标检测解决方案。无论是提高精度、减小模型体积还是适应特定任务，YOLOv12都提供了丰富的修改空间和可能性。 
+
+## 9. YOLOv12模型加载机制和任务注册流程
+
+要深入理解YOLOv12的工作原理和如何正确添加新任务，了解其模型加载机制和任务注册流程是必不可少的。本章将详细说明YOLOv12的架构设计和任务处理流程。
+
+### 9.1 模型加载机制
+
+YOLOv12采用了模块化设计，支持多种加载方式，主要包括从配置文件创建新模型和从预训练权重加载模型两种方式。
+
+#### 9.1.1 整体架构与继承关系
+
+```
+Model (基类, ultralytics/engine/model.py)
+  └── YOLO (主要实现, ultralytics/models/yolo/model.py)
+        └── Task-specific Models (任务特定模型实现)
+```
+
+- **Model类**：框架的核心基类，定义了所有模型共有的接口和功能
+- **YOLO类**：继承自Model类，实现YOLO系列模型的特定功能
+- **任务特定模型**：如DetectionModel、SegmentationModel等，在nn/tasks.py中定义
+
+#### 9.1.2 从配置文件创建模型流程
+
+当使用`model = YOLO('yolov12.yaml')`创建模型时，内部执行以下步骤：
+
+1. **解析配置文件**：
+   ```python
+   # Model._new方法调用yaml_model_load加载配置
+   cfg_dict = yaml_model_load(cfg)
+   ```
+
+2. **推断任务类型**：
+   ```python
+   # 从配置推断任务类型
+   self.task = task or guess_model_task(cfg_dict)
+   ```
+
+3. **动态加载模型类**：
+   ```python
+   # 通过_smart_load和task_map查找对应的模型类
+   self.model = self._smart_load("model")(cfg_dict, verbose=verbose)
+   ```
+
+4. **初始化模型**：
+   - 模型类(如DetectionModel)接收配置字典
+   - 创建网络结构并初始化权重
+
+#### 9.1.3 从预训练权重加载模型流程
+
+当使用`model = YOLO('yolov12n.pt')`加载预训练模型时，内部执行以下步骤：
+
+1. **加载权重文件**：
+   ```python
+   # Model._load方法调用attempt_load_one_weight加载权重
+   self.model, self.ckpt = attempt_load_one_weight(weights)
+   ```
+
+2. **获取任务信息**：
+   ```python
+   # 从模型参数中获取任务信息
+   self.task = self.model.args["task"]
+   ```
+
+3. **设置模型参数**：
+   ```python
+   # 恢复模型参数和覆盖设置
+   self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
+   ```
+
+#### 9.1.4 任务映射机制
+
+YOLOv12使用`task_map`属性将任务名称映射到相应的组件类：
+
+```python
+@property
+def task_map(self):
+    return {
+        "detect": {
+            "model": DetectionModel,
+            "trainer": yolo.detect.DetectionTrainer,
+            "validator": yolo.detect.DetectionValidator,
+            "predictor": yolo.detect.DetectionPredictor,
+        },
+        # 其他任务...
+    }
+```
+
+通过`_smart_load`方法，框架可以根据当前任务动态加载对应的组件：
+
+```python
+def _smart_load(self, key):
+    try:
+        return self.task_map[self.task][key]
+    except Exception as e:
+        # 处理错误...
+```
+
+### 9.2 任务注册流程
+
+要向YOLOv12添加新任务，需要完成以下步骤，确保正确遵循框架的架构规范。
+
+#### 9.2.1 任务注册完整流程
+
+1. **在nn/tasks.py中定义模型类**
+   新任务的核心模型类必须在`ultralytics/nn/tasks.py`中定义，而不是放在任务目录中：
+
+   ```python
+   # 在ultralytics/nn/tasks.py中添加
+   class NewTaskModel(DetectionModel):  # 通常继承自DetectionModel或其他基础模型
+       def __init__(self, cfg='yolov12n-newtask.yaml', ch=3, nc=None, verbose=True):
+           # 初始化代码...
+           super().__init__(cfg=cfg, ch=ch, nc=nc, verbose=verbose)
+           
+       def init_criterion(self):
+           # 定义损失函数
+           return NewTaskLoss(self)
+   ```
+
+2. **创建任务目录结构**
+   按照规范在`ultralytics/models/yolo/`下创建新任务目录，但不包含模型定义：
+
+   ```
+   ultralytics/models/yolo/newtask/
+   ├── __init__.py        # 导出接口
+   ├── train.py           # 训练器
+   ├── val.py             # 验证器
+   └── predict.py         # 预测器
+   ```
+
+3. **实现任务特定组件**
+   在任务目录中实现三个主要组件，并确保从正确位置导入模型类：
+
+   ```python
+   # ultralytics/models/yolo/newtask/train.py
+   from ultralytics.nn.tasks import NewTaskModel  # 从nn.tasks导入模型类
+   
+   class NewTaskTrainer(BaseTrainer):
+       # 训练器实现...
+       
+       def get_model(self, cfg=None, weights=None, verbose=True):
+           # 使用正确导入的模型类
+           model = NewTaskModel(cfg, verbose=verbose)
+           if weights:
+               model.load(weights)
+           return model
+   ```
+
+4. **导出任务组件接口**
+   在`__init__.py`中导出任务组件，但不导出模型类（因为它在nn/tasks.py中）：
+
+   ```python
+   # ultralytics/models/yolo/newtask/__init__.py
+   from .train import NewTaskTrainer
+   from .val import NewTaskValidator
+   from .predict import NewTaskPredictor
+   
+   __all__ = ['NewTaskTrainer', 'NewTaskValidator', 'NewTaskPredictor']
+   ```
+
+5. **更新任务映射**
+   在`ultralytics/models/yolo/model.py`的`YOLO.task_map`方法中添加新任务：
+
+   ```python
+   # 首先更新导入
+   from ultralytics.nn.tasks import ClassificationModel, DetectionModel, NewTaskModel
+   
+   @property
+   def task_map(self):
+       return {
+           # 任务映射...
+           "newtask": {
+               "model": NewTaskModel,  # 直接从nn.tasks导入
+               "trainer": yolo.newtask.NewTaskTrainer,
+               "validator": yolo.newtask.NewTaskValidator,
+               "predictor": yolo.newtask.NewTaskPredictor,
+           },
+       }
+   ```
+
+6. **更新任务注册表**
+   在`ultralytics/cfg/__init__.py`中更新任务注册表：
+
+   ```python
+   # 添加到TASKS集合
+   TASKS = {"detect", "segment", "classify", "pose", "obb", "newtask"}
+   
+   # 添加任务对应的默认数据集和模型
+   TASK2DATA["newtask"] = "newtask-dataset.yaml"
+   TASK2MODEL["newtask"] = "yolov12n-newtask.pt"
+   TASK2METRIC["newtask"] = "metrics/newtask_metric"
+   ```
+
+7. **创建任务特定配置文件**
+   在`ultralytics/cfg/models/v12/`中创建新任务的模型配置文件：
+
+   ```yaml
+   # ultralytics/cfg/models/v12/yolov12-newtask.yaml
+   # 配置文件内容...
+   ```
+
+#### 9.2.2 动态加载原理与实现细节
+
+YOLOv12的动态加载机制依赖于以下关键概念：
+
+1. **属性映射**：`task_map`属性将任务名映射到对应的组件类
+2. **惰性加载**：组件只在需要时才被加载，减少内存占用
+3. **类型推断**：框架能够从配置文件或权重文件推断任务类型
+4. **组件分离**：模型定义与实现组件分离，保持架构清晰
+
+当执行某个操作（如训练或预测）时，框架会：
+1. 获取当前任务名称
+2. 通过`task_map`查找对应的组件类
+3. 实例化需要的组件并执行操作
+
+#### 9.2.3 正确的导入与注册模式
+
+添加新任务时，应遵循以下导入与注册模式：
+
+```python
+# 在ultralytics/nn/tasks.py中
+class NewTaskModel(DetectionModel):
+    # 模型定义...
+    
+# 在ultralytics/models/yolo/model.py中
+from ultralytics.nn.tasks import NewTaskModel
+
+@property
+def task_map(self):
+    return {
+        # 任务映射...
+        "newtask": {
+            "model": NewTaskModel,  # 直接从nn.tasks导入
+            "trainer": yolo.newtask.NewTaskTrainer,
+            "validator": yolo.newtask.NewTaskValidator,
+            "predictor": yolo.newtask.NewTaskPredictor,
+        },
+    }
+```
+
+### 9.3 任务组件执行流程
+
+当执行某个操作时，YOLOv12会按照以下流程加载和使用组件：
+
+#### 9.3.1 训练流程
+
+```python
+model = YOLO('yolov12.yaml')
+model.train(data='dataset.yaml')
+```
+
+1. 框架通过`task_map`查找对应的`trainer`类
+2. 实例化训练器，并传入参数：`trainer = self._smart_load("trainer")(overrides=args)`
+3. 训练器获取模型：`self.trainer.model = self.trainer.get_model()`
+4. 执行训练流程：`self.trainer.train()`
+
+#### 9.3.2 预测流程
+
+```python
+model = YOLO('yolov12.pt')
+results = model.predict('image.jpg')
+```
+
+1. 框架通过`task_map`查找对应的`predictor`类
+2. 实例化预测器：`predictor = self._smart_load("predictor")(overrides=args)`
+3. 执行预测流程：`return predictor(source, stream, **kwargs)`
+
+#### 9.3.3 验证流程
+
+```python
+model = YOLO('yolov12.pt')
+metrics = model.val(data='valid.yaml')
+```
+
+1. 框架通过`task_map`查找对应的`validator`类
+2. 实例化验证器：`validator = self._smart_load("validator")(args=args)`
+3. 执行验证流程：`return validator(model=self.model)`
+
+### 9.4 添加新任务的最佳实践
+
+在向YOLOv12添加新任务时，建议遵循以下最佳实践：
+
+1. **遵循架构分离原则**：模型定义在nn/tasks.py，组件实现在models/yolo/任务目录
+2. **复用现有组件**：尽可能继承现有组件，只修改必要的部分
+3. **保持命名一致性**：使用`<TaskName>Model`、`<TaskName>Trainer`等命名模式
+4. **确保导入正确**：从正确的位置导入类，避免循环导入
+5. **添加完整文档**：为新添加的类和方法提供详细文档
+6. **编写单元测试**：确保新任务功能正常工作
+7. **维护向后兼容性**：确保不破坏现有功能
+
+遵循上述模型加载机制和任务注册流程，可以正确地向YOLOv12项目添加新的任务类型，扩展框架的功能范围。 

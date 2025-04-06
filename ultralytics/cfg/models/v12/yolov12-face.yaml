@@ -2,6 +2,7 @@
 # YOLOv12 人脸关键点检测模型配置，支持人脸检测和5个面部关键点预测
 
 # 参数
+task: face  # 任务类型：face表示人脸检测和关键点检测
 nc: 1  # 类别数量 (1表示只有人脸一个类别)
 kpt_shape: [5, 3]  # 关键点形状：5个关键点，每个关键点3个值(x,y,visibility)
 scales:  # 模型复合缩放常数，例如'model=yolov12n-face.yaml'将使用'n'缩放
@@ -43,5 +44,5 @@ head:
   - [[-1, 8], 1, Concat, [1]] # 连接头P5
   - [-1, 2, C3k2, [1024, True]] # 20 (P5/32-large)
 
-  # 使用新的FacePose头替代原来的Detect
+  # 使用专门的FacePose头进行人脸检测和关键点预测
   - [[14, 17, 20], 1, FacePose, [nc, kpt_shape]] # FacePose(P3, P4, P5) 

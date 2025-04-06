@@ -46,4 +46,84 @@
 ```python
 from google.colab import drive
 drive.mount('/content/drive')
-``` 
+```
+
+## 环境设置
+
+1. 克隆YOLOv12仓库到Colab：
+```
+!git clone https://github.com/你的用户名/yolov12-main.git
+%cd yolov12-main
+```
+
+2. 安装依赖项：
+```
+!pip install -r requirements.txt
+```
+
+注意：如果安装flash-attn出现问题，可以尝试以下替代方法：
+```
+# 对于CUDA 11.8环境
+!pip install flash-attn --no-build-isolation
+
+# 或者跳过flash-attn安装
+# 修改requirements.txt文件，注释掉flash-attn行
+```
+
+3. 使用本地ultralytics：
+```
+# 从本地文件夹导入YOLO，不需要安装ultralytics包
+from ultralytics import YOLO
+
+# 加载模型
+model = YOLO('yolov12n.pt')
+```
+
+## 常见问题
+
+1. **找不到flash_attn wheel文件**
+   - 已将依赖更改为从PyPI安装flash-attn
+   - 如果仍有问题，可以尝试直接从源码安装或跳过此依赖
+
+2. **GPU内存不足**
+   - 使用较小的模型（如yolov12n.pt）
+   - 减小batch_size和图像尺寸
+
+3. **模型文件下载问题**
+   - 可以手动下载模型文件，然后上传到Colab
+
+## 示例用法
+
+```python
+# 导入并测试YOLOv12
+import torch
+from ultralytics import YOLO
+
+# 检查GPU
+print(f"是否有GPU可用: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"GPU名称: {torch.cuda.get_device_name(0)}")
+
+# 加载模型
+model = YOLO('yolov12n.pt')
+
+# 用于测试的图像
+test_image = 'ultralytics/assets/bus.jpg'
+
+# 运行推理
+results = model(test_image)
+
+# 显示结果
+from IPython.display import display, Image
+import cv2
+
+results[0].plot()
+cv2.imwrite('results.jpg', results[0].plot())
+display(Image('results.jpg'))
+```
+
+## 更多信息
+
+有关更多详细信息，请参考：
+- [本地ultralytics使用说明.md](本地ultralytics使用说明.md)
+- [YOLOv12训练流程指南.md](YOLOv12训练流程指南.md) 

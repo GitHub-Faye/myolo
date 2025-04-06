@@ -1,0 +1,51 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# WIDER Face人脸关键点数据集配置
+# 文档: https://docs.ultralytics.com/datasets/pose/face/
+# 使用示例: yolo train data=wflw.yaml
+
+# 数据集结构
+# ├── ultralytics
+# └── datasets
+#     └── widerface  ← 下载位置
+
+# 训练/验证/测试集路径
+path: /content/widerface  # 数据集根目录
+train: train  # 训练图像目录 (相对于'path')
+val: val     # 验证图像目录 (相对于'path')
+test: test   # 测试图像目录 (相对于'path')
+
+# 关键点配置
+kpt_shape: [5, 3]  # 5个关键点，每个点有3个值 [x,y,visible]
+flip_idx: [1, 0, 2, 4, 3]  # 水平翻转时的关键点对应关系：右眼<->左眼，右嘴角<->左嘴角
+
+# 类别名称
+names:
+  0: face  # 只有一个类别：人脸
+
+# 关键点名称
+kpt_names: ['left_eye', 'right_eye', 'nose', 'left_mouth', 'right_mouth']
+
+# 数据集准备说明
+download: |
+  # WIDER Face数据集下载和准备步骤
+  # 1. 使用prepare_widerface.py脚本下载和准备数据集:
+  #    python prepare_widerface.py --download --process
+  #
+  # 2. 该脚本会自动:
+  #    - 下载WIDER Face数据集(训练集、验证集、测试集和标注)
+  #    - 解压并组织文件结构
+  #    - 转换标注为YOLO格式: class_id cx cy w h x1 y1 v1 x2 y2 v2 ... x5 y5 v5
+  #      其中(cx, cy, w, h)是归一化的边界框中心坐标和宽高，(x1,y1,v1)等是关键点坐标和可见性
+  #
+  # 3. 确保文件夹结构如下:
+  #    widerface/
+  #    ├── images/
+  #    │   ├── train/
+  #    │   ├── val/
+  #    │   └── test/
+  #    └── labels/
+  #        ├── train/
+  #        ├── val/
+  #        └── test/
+  #    └── data.yaml 

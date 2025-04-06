@@ -6,14 +6,16 @@
 # !git clone https://github.com/你的用户名/yolov12-main.git
 # %cd yolov12-main
 
-# 安装依赖
+# 安装依赖，但不包括ultralytics（使用本地版本）
 # !pip install -r requirements.txt
 
-# 安装当前目录作为包（开发模式）
+# 不需要安装此项目作为包，因为我们直接使用本地ultralytics文件夹
+# 注释掉下面的行：
 # !pip install -e .
 
 # 导入并测试YOLOv12
 import torch
+# 从本地ultralytics文件夹导入YOLO，而不是从安装的包导入
 from ultralytics import YOLO
 
 # 检查是否有可用的GPU

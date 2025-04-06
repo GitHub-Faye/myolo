@@ -6,6 +6,7 @@
 import gradio as gr
 import cv2
 import tempfile
+# 从本地ultralytics文件夹导入YOLO，而不是从安装的包导入
 from ultralytics import YOLO
 
 

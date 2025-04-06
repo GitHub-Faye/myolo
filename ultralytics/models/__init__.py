@@ -11,12 +11,12 @@ __all__ = "YOLO", "RTDETR", "SAM", "FastSAM", "NAS", "YOLOWorld"  # allow simple
 import torch
 
 # 如果有face相关导入的注释，取消注释或添加新导入
-from .yolo.classify import ClassificationModel
-from .yolo.detect import DetectionModel
-from .yolo.pose import PoseModel
-from .yolo.segment import SegmentationModel
-from .yolo.obb import OBBModel
-from .yolo.face import FacePoseModel
+from ultralytics.nn.tasks import ClassificationModel
+from ultralytics.nn.tasks import DetectionModel
+from ultralytics.nn.tasks import PoseModel
+from ultralytics.nn.tasks import SegmentationModel
+from ultralytics.nn.tasks import OBBModel
+from ultralytics.nn.tasks import FacePoseModel
 
 # 添加face到任务映射
 TASK_MAP = {
