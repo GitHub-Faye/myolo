@@ -1,10 +1,10 @@
 # Ultralytics 🚀 AGPL-3.0 license
 
-from ultralytics.models.yolo.pose.predict import PosePredictor
+from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.utils import ops
 
-class FacePosePredictor(PosePredictor):
+class FacePosePredictor(BasePredictor):
     """人脸关键点检测预测器"""
 
     def postprocess(self, preds, img, orig_imgs):

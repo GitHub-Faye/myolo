@@ -5,7 +5,6 @@ from .nas import NAS
 from .rtdetr import RTDETR
 from .sam import SAM
 from .yolo import YOLO, YOLOWorld
-from .yolo.face import FacePoseModel  # 添加FacePoseModel导入
 
 __all__ = "YOLO", "RTDETR", "SAM", "FastSAM", "NAS", "YOLOWorld"  # allow simpler import
 
@@ -17,6 +16,7 @@ from .yolo.detect import DetectionModel
 from .yolo.pose import PoseModel
 from .yolo.segment import SegmentationModel
 from .yolo.obb import OBBModel
+from .yolo.face import FacePoseModel
 
 # 添加face到任务映射
 TASK_MAP = {
